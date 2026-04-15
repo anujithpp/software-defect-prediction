@@ -2,10 +2,13 @@
 download_dataset.py
 --------------------
 Downloads the jm1 dataset from the OpenML repository (a publicly accessible
-mirror of the NASA PROMISE data) and saves it as jm1.csv in the current folder.
+mirror of the NASA PROMISE data) and saves it as data/jm1.csv.
 
 Run this once from the repo root before executing the pipeline:
     python scripts/download_dataset.py
+
+After completion, run the main pipeline:
+    python src/defect_prediction.py
 """
 
 import urllib.request
@@ -19,15 +22,25 @@ import sys
 OPENML_URL = "https://www.openml.org/data/download/53936/jm1.arff"
 
 def download_arff(url: str, dest: str) -> None:
-    print(f"[INFO] Downloading jm1 dataset from OpenML ...")
-    print(f"       URL: {url}")
+    """
+    Download the jm1 ARFF file from OpenML to `dest`.
+    Falls back with a clear manual-download message on failure.
+    """
+    print("=" * 55)
+    print("  Downloading jm1 dataset from OpenML")
+    print("=" * 55)
+    print(f"  URL : {url}")
+    print(f"  Dest: {dest}")
     try:
         urllib.request.urlretrieve(url, dest)
-        print(f"[INFO] Saved ARFF file → {dest}")
+        print(f"[INFO] ARFF file downloaded successfully.\n")
     except Exception as e:
-        sys.exit(f"[ERROR] Download failed: {e}\n"
-                 "        Please download jm1.csv manually from:\n"
-                 "        https://www.openml.org/d/1053  (Export -> CSV)")
+        sys.exit(
+            f"\n[ERROR] Download failed: {e}\n"
+            "        Please download jm1.csv manually from:\n"
+            "        https://www.openml.org/d/1053  (click Export -> CSV)\n"
+            "        and place it at  data/jm1.csv  in the repo root.\n"
+        )
 
 
 def arff_to_csv(arff_path: str, csv_path: str) -> None:
@@ -86,28 +99,41 @@ def arff_to_csv(arff_path: str, csv_path: str) -> None:
 
 
 def main():
-    # Resolve paths relative to repo root (one level up from scripts/)
+    """
+    Entry point — resolves paths, downloads ARFF, converts to CSV, cleans up.
+    """
+    print()
+
+    # __file__ is scripts/download_dataset.py
+    # dirname twice  →  repo root
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir  = os.path.join(repo_root, "data")
     os.makedirs(data_dir, exist_ok=True)   # create data/ if it doesn't exist
     arff_path = os.path.join(data_dir, "jm1.arff")
     csv_path  = os.path.join(data_dir, "jm1.csv")
 
+    # Skip download if the CSV already exists.
     if os.path.exists(csv_path):
-        print(f"[INFO] jm1.csv already exists at:\n       {csv_path}")
-        print("       Delete it and re-run this script to re-download.\n")
+        print(f"[INFO] data/jm1.csv already exists at:")
+        print(f"       {csv_path}")
+        print("       To re-download, delete the file and re-run this script.\n")
         return
 
     download_arff(OPENML_URL, arff_path)
     arff_to_csv(arff_path, csv_path)
 
-    # Clean up the intermediate ARFF file
+    # Remove the intermediate ARFF file to keep data/ clean.
     if os.path.exists(arff_path):
         os.remove(arff_path)
-        print("[INFO] Temporary ARFF file removed.\n")
+        print("[INFO] Temporary ARFF file removed.")
 
-    print("[DONE] data/jm1.csv is ready. You can now run:\n"
-          "       python src/defect_prediction.py\n")
+    print()
+    print("=" * 55)
+    print("  [DONE] data/jm1.csv is ready.")
+    print("  Next step:")
+    print("    python src/defect_prediction.py")
+    print("=" * 55)
+    print()
 
 
 if __name__ == "__main__":

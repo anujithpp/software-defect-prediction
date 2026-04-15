@@ -8,8 +8,12 @@ __pycache__/
 venv/
 env/
 
-# ── Data files (large; regenerate with download_dataset.py) ────────────────
+# ── Data files (large / regenerable — run scripts/download_dataset.py) ──────
 *.arff
+data/jm1.csv
+
+# ── Auto-generated plots (regenerable — run src/defect_prediction.py) ───────
+plots/
 
 # ── Jupyter artefacts ──────────────────────────────────────────────────────
 .ipynb_checkpoints/
