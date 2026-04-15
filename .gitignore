@@ -1,0 +1,24 @@
+# ── Python cache ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Virtual environments ────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Data files (large; regenerate with download_dataset.py) ────────────────
+*.arff
+
+# ── Jupyter artefacts ──────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── OS junk ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── IDE settings ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
