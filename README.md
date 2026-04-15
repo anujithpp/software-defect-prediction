@@ -50,20 +50,22 @@ python src/defect_prediction.py
 | **Target** | `defects` column — True (buggy) / False (clean) |
 | **Preprocessing** | Mean imputation → StandardScaler normalisation |
 | **Split** | 80% train / 20% test (stratified) |
-| **Models** | Random Forest Classifier, Gaussian Naive Bayes |
-| **Metrics** | Accuracy, Precision, Recall, Confusion Matrix |
+| **Models** | Random Forest · Gaussian Naive Bayes · Logistic Regression |
+| **Metrics** | Accuracy, Precision, Recall, F1-Score, Confusion Matrix |
 
 ---
 
 ## 📊 Results
 
-| Model | Accuracy | Precision | Recall |
-|-------|----------|-----------|--------|
-| Random Forest | **80.98%** | **51.78%** | **24.23%** |
-| Gaussian Naive Bayes | 80.20% | 47.60% | 23.52% |
+| Rank | Model | Accuracy | Precision | Recall | F1-Score |
+|------|-------|----------|-----------|--------|----------|
+| 🥇 | **Random Forest** | **80.98%** | 51.78% | 24.23% | **33.01%** |
+| 🥈 | Gaussian Naive Bayes | 80.20% | 47.60% | 23.52% | 31.48% |
+| 🥉 | Logistic Regression | 80.98% | 53.54% | 12.59% | 20.38% |
 
-> **Note:** Low recall is expected due to class imbalance (~19% defective modules).  
-> Random Forest outperforms Naive Bayes on all three metrics.
+> **Note:** Low Recall across all models is expected — the dataset is class-imbalanced (~19 % defective).  
+> **Random Forest** ranks first by F1-Score, the most meaningful metric under class imbalance.  
+> Logistic Regression achieves the highest Precision but the lowest Recall (most conservative).
 
 ---
 
