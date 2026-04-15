@@ -4,3 +4,10 @@ numpy>=1.23.0
 
 # Machine learning
 scikit-learn>=1.2.0
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Class imbalance handling
+imbalanced-learn>=0.10.0
