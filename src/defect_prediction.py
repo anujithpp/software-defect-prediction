@@ -44,6 +44,7 @@ from sklearn.model_selection import (
     train_test_split,   # hold-out split
     StratifiedKFold,    # K-fold that preserves class ratio in each fold
     cross_val_score,    # runs CV and returns per-fold scores
+    GridSearchCV,       # exhaustive hyperparameter search with cross-validation
 )
 from sklearn.preprocessing import StandardScaler   # z-score normalisation
 from sklearn.impute        import SimpleImputer     # replaces NaN with column mean
@@ -71,6 +72,11 @@ from sklearn.metrics import (
 # existing ones in feature space, addressing class imbalance.
 from imblearn.over_sampling import SMOTE
 
+# --- SciPy: Statistics -------------------------------------------------------
+# pointbiserialr computes the point-biserial correlation between a continuous
+# feature and a binary target — the right tool for EDA on defect prediction.
+from scipy.stats import pointbiserialr
+
 
 # =============================================================================
 # HELPER — PLOTS DIRECTORY
@@ -84,6 +90,246 @@ def ensure_plots_dir(repo_root: str) -> str:
     plots_dir = os.path.join(repo_root, "plots")
     os.makedirs(plots_dir, exist_ok=True)
     return plots_dir
+
+
+def ensure_eda_dir(plots_dir: str) -> str:
+    """
+    Create plots/eda/ under plots_dir if it does not already exist.
+    Returns the absolute path to plots/eda/.
+    """
+    eda_dir = os.path.join(plots_dir, "eda")
+    os.makedirs(eda_dir, exist_ok=True)
+    return eda_dir
+
+
+# =============================================================================
+# SECTION 0 — EXPLORATORY DATA ANALYSIS (EDA)
+# -----------------------------------------------------------------------------
+# EDA runs BEFORE the ML pipeline to build intuition about the dataset:
+#
+#   0a) Basic statistics   — shape, dtypes, missing values, describe()
+#   0b) Feature distributions — histograms per feature, colored by class
+#   0c) Outlier detection  — IQR-based outlier counts + boxplot of top 10
+#   0d) Defect correlation — point-biserial r between each feature & label
+#
+# All plots are saved to plots/eda/ AND displayed with plt.show().
+# =============================================================================
+
+def run_eda(df: pd.DataFrame, plots_dir: str) -> None:
+    """
+    Run a complete Exploratory Data Analysis on the raw jm1 DataFrame.
+
+    Parameters
+    ----------
+    df        : pd.DataFrame  — raw dataset as returned by load_data()
+    plots_dir : str           — path to the plots/ directory
+    """
+    print("=" * 62)
+    print("  STEP 0 — EXPLORATORY DATA ANALYSIS  (EDA)")
+    print("=" * 62 + "\n")
+
+    # Ensure the plots/eda/ sub-directory exists.
+    eda_dir = ensure_eda_dir(plots_dir)
+
+    # Separate numeric features from the boolean target.
+    TARGET_COL   = "defects"
+    X_df         = df.drop(columns=[TARGET_COL]).select_dtypes(include=[np.number])
+    feature_cols = list(X_df.columns)      # list of the 21 numeric feature names
+
+    # Encode target to 0/1 integers for correlation maths.
+    y_raw = df[TARGET_COL].map({True: 1, False: 0, "True": 1, "False": 0}).astype(int)
+
+    # ── 0a. Basic Statistics ─────────────────────────────────────────────────
+    print("  ── 0a. Basic Statistics ──")
+    print(f"  Dataset shape     : {df.shape[0]:,} rows × {df.shape[1]} columns")
+    print(f"  Feature columns   : {len(feature_cols)}  ({feature_cols[:4]} … )")
+    print()
+
+    # Data types
+    print("  Column dtypes:")
+    print(df.dtypes.to_string(dtype=False))
+    print()
+
+    # Missing value report
+    missing = df.isnull().sum()
+    missing_nonzero = missing[missing > 0]
+    if len(missing_nonzero) == 0:
+        print("  Missing values    : None 🎉")
+    else:
+        print(f"  Missing values ({len(missing_nonzero)} columns):")
+        print(missing_nonzero.to_string())
+    print()
+
+    # Descriptive statistics for numeric features
+    print("  Descriptive Statistics (numeric features):")
+    desc = X_df.describe().T  # transpose so features are rows
+    with pd.option_context("display.float_format", "{:.4f}".format,
+                           "display.max_rows", 30):
+        print(desc)
+    print()
+
+    # ── 0b. Feature Distributions (histograms colored by class) ─────────────
+    print("  ── 0b. Feature Distributions (histograms, overlay by class) ──")
+
+    # Build a combined DataFrame with the integer label so we can split by class.
+    df_plot = X_df.copy()
+    df_plot["defect"] = y_raw.values
+
+    n_cols = 4
+    n_rows = int(np.ceil(len(feature_cols) / n_cols))  # e.g. 21 feats → 6 rows
+
+    fig, axes = plt.subplots(n_rows, n_cols,
+                             figsize=(n_cols * 4.5, n_rows * 3.4))
+    axes_flat = axes.flatten()
+
+    clr_clean = "#3498db"     # blue  — class 0 (clean)
+    clr_defec = "#e74c3c"     # red   — class 1 (defective)
+
+    for idx, feat in enumerate(feature_cols):
+        ax = axes_flat[idx]
+        # Separate values by class and plot overlapping histograms.
+        vals_clean = df_plot.loc[df_plot["defect"] == 0, feat].dropna()
+        vals_defec = df_plot.loc[df_plot["defect"] == 1, feat].dropna()
+
+        ax.hist(vals_clean, bins=30, alpha=0.60, color=clr_clean,
+                label="Clean (0)",   density=True, edgecolor="none")
+        ax.hist(vals_defec, bins=30, alpha=0.65, color=clr_defec,
+                label="Defect (1)",  density=True, edgecolor="none")
+
+        ax.set_title(feat, fontsize=9, fontweight="bold")
+        ax.set_xlabel("Value", fontsize=7)
+        ax.set_ylabel("Density", fontsize=7)
+        ax.tick_params(labelsize=7)
+        ax.grid(alpha=0.25)
+
+        if idx == 0:                          # legend only on first subplot
+            ax.legend(fontsize=7)
+
+    # Hide any unused subplots (last row may have empty cells).
+    for ax in axes_flat[len(feature_cols):]:
+        ax.set_visible(False)
+
+    fig.suptitle(
+        "Feature Distributions — Overlay by Defect Class  (density-normalised)",
+        fontsize=14, fontweight="bold", y=1.01
+    )
+    plt.tight_layout()
+    dist_path = os.path.join(eda_dir, "feature_distributions.png")
+    _save_and_show(fig, dist_path, "[EDA Plot 1]")
+    print(f"  Feature distribution grid saved → {dist_path}\n")
+
+    # ── 0c. Outlier Detection  (IQR method) ──────────────────────────────────
+    print("  ── 0c. Outlier Detection  (IQR method) ──")
+    print("  Points beyond  Q1 − 1.5×IQR  or  Q3 + 1.5×IQR  are outliers.\n")
+
+    outlier_counts = {}     # {feature_name: int count_of_outliers}
+    for feat in feature_cols:
+        col_data = X_df[feat].dropna()
+        Q1  = col_data.quantile(0.25)
+        Q3  = col_data.quantile(0.75)
+        IQR = Q3 - Q1
+        lo  = Q1 - 1.5 * IQR
+        hi  = Q3 + 1.5 * IQR
+        n_out = int(((col_data < lo) | (col_data > hi)).sum())
+        outlier_counts[feat] = n_out
+
+    # Build a ranked Series (most outlier-prone first).
+    outlier_series = pd.Series(outlier_counts).sort_values(ascending=False)
+
+    print(f"  {'Feature':<28}  {'Outlier Count':>13}  {'Pct of total':>13}")
+    print("  " + "-" * 58)
+    for feat, cnt in outlier_series.items():
+        pct = cnt / len(df) * 100
+        print(f"  {feat:<28}  {cnt:>13,}  {pct:>12.1f} %")
+    print()
+
+    # Boxplot of the top 10 most outlier-prone features.
+    top10_feats = list(outlier_series.head(10).index)
+
+    fig2, ax2 = plt.subplots(figsize=(13, 6))
+    # Standardise (z-score) so wildly different scales don't hide each other.
+    from sklearn.preprocessing import StandardScaler as _SS
+    X_scaled_eda = _SS().fit_transform(X_df[top10_feats])
+    df_box = pd.DataFrame(X_scaled_eda, columns=top10_feats)
+
+    df_box_melt = df_box.melt(var_name="Feature", value_name="Z-score")
+    sns.boxplot(
+        data=df_box_melt, x="Feature", y="Z-score",
+        palette="Set2", linewidth=1.2, fliersize=2, ax=ax2
+    )
+    ax2.axhline(0, color="grey", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax2.set_title(
+        "Boxplot — Top 10 Most Outlier-Prone Features  (z-score normalised)",
+        fontsize=13, fontweight="bold"
+    )
+    ax2.set_xlabel("Feature", fontsize=11)
+    ax2.set_ylabel("Z-score", fontsize=11)
+    ax2.tick_params(axis="x", rotation=30)
+    plt.tight_layout()
+    boxplot_path = os.path.join(eda_dir, "outliers_boxplot.png")
+    _save_and_show(fig2, boxplot_path, "[EDA Plot 2]")
+    print(f"  Outlier boxplot saved → {boxplot_path}\n")
+
+    # ── 0d. Defect Correlation (point-biserial) ───────────────────────────────
+    print("  ── 0d. Defect Correlation  (Point-Biserial r with defect label) ──")
+    print("  Point-biserial r = standard Pearson r but one variable is binary.")
+    print("  Range: −1 (strong negative) … 0 (none) … +1 (strong positive)\n")
+
+    pb_corr = {}    # {feature: (r, p-value)}
+    for feat in feature_cols:
+        col_data = X_df[feat].fillna(X_df[feat].mean())   # impute before corr
+        r, p = pointbiserialr(col_data, y_raw.values)
+        pb_corr[feat] = (r, p)
+
+    # Build a DataFrame sorted by |r| descending.
+    pb_df = pd.DataFrame(
+        [(f, v[0], v[1]) for f, v in pb_corr.items()],
+        columns=["Feature", "r", "p-value"]
+    ).assign(abs_r=lambda d: d["r"].abs()) \
+     .sort_values("abs_r", ascending=False) \
+     .drop(columns="abs_r") \
+     .reset_index(drop=True)
+
+    print(f"  {'Rank':<5} {'Feature':<28} {'r':>8}  {'p-value':>12}  Significance")
+    print("  " + "-" * 65)
+    for rank, row in pb_df.iterrows():
+        sig = "***" if row["p-value"] < 0.001 else (
+              "**"  if row["p-value"] < 0.01  else (
+              "*"   if row["p-value"] < 0.05  else "ns"))
+        print(f"  {rank+1:<5} {row['Feature']:<28} {row['r']:>8.4f}  "
+              f"{row['p-value']:>12.4e}  {sig}")
+    print()
+
+    # Horizontal bar chart — top 15 features by |r|.
+    top15 = pb_df.head(15).copy()
+    top15 = top15.iloc[::-1]     # flip so highest abs(r) appears at top
+    colors_pb = ["#e74c3c" if r > 0 else "#3498db" for r in top15["r"]]
+
+    fig3, ax3 = plt.subplots(figsize=(10, 7))
+    bars3 = ax3.barh(top15["Feature"], top15["r"],
+                     color=colors_pb, alpha=0.85, edgecolor="black")
+
+    # Annotate each bar with the r value.
+    for bar, r_val in zip(bars3, top15["r"]):
+        x_pos = r_val + 0.004 if r_val >= 0 else r_val - 0.004
+        ha    = "left"         if r_val >= 0 else "right"
+        ax3.text(x_pos, bar.get_y() + bar.get_height() / 2,
+                 f"{r_val:+.4f}", va="center", ha=ha, fontsize=9)
+
+    ax3.axvline(0, color="black", linewidth=0.8)
+    ax3.set_xlabel("Point-Biserial Correlation  r  (with defect label)",
+                   fontsize=11)
+    ax3.set_title(
+        "Top 15 Features Correlated with Defects  (Point-Biserial r)",
+        fontsize=13, fontweight="bold"
+    )
+    ax3.grid(axis="x", alpha=0.3)
+    plt.tight_layout()
+    corr_path = os.path.join(eda_dir, "defect_correlation.png")
+    _save_and_show(fig3, corr_path, "[EDA Plot 3]")
+    print(f"  Defect correlation chart saved → {corr_path}\n")
+
+    print("  EDA complete.  Results above + 3 plots saved to plots/eda/\n")
 
 
 # =============================================================================
@@ -959,14 +1205,189 @@ def plot_smote_comparison(before_results: list, after_results: list,
 
 
 # =============================================================================
+# SECTION 10 — HYPERPARAMETER TUNING  (Random Forest — GridSearchCV)
+# -----------------------------------------------------------------------------
+# Default hyperparameters are "good guesses" but rarely optimal. GridSearchCV
+# exhaustively trains and evaluates the model for every combination in the
+# param_grid, using K-fold stratified cross-validation to score each combo.
+#
+# Grid size: 3 × 4 × 3 = 36 combinations × 5 folds = 180 model fits.
+# Scoring: F1 — best metric for imbalanced classification.
+#
+# After finding the best params, we retrain on the full training set and
+# compare default vs tuned F1 and AUC on the hold-out test set.
+# =============================================================================
+
+def tune_random_forest(
+    X_train: np.ndarray, y_train: np.ndarray,
+    X_test:  np.ndarray, y_test:  np.ndarray,
+    plots_dir: str
+) -> RandomForestClassifier:
+    """
+    Run GridSearchCV to find optimal Random Forest hyperparameters.
+
+    Parameters
+    ----------
+    X_train, y_train : training data
+    X_test,  y_test  : held-out test data (used for before/after comparison)
+    plots_dir        : path to the plots/ directory
+
+    Returns
+    -------
+    RandomForestClassifier — the BEST model, already fitted on X_train.
+    """
+    print("=" * 62)
+    print("  STEP 10 — HYPERPARAMETER TUNING  (Random Forest, GridSearchCV)")
+    print("=" * 62)
+
+    # ── 10a. Evaluate default RF first (for before/after comparison) ─────────
+    print("  Training default Random Forest (n_estimators=100) …", end=" ", flush=True)
+    rf_default = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+    rf_default.fit(X_train, y_train)
+    print("done.")
+
+    y_pred_def  = rf_default.predict(X_test)
+    y_prob_def  = rf_default.predict_proba(X_test)[:, 1]
+    f1_default  = f1_score    (y_test, y_pred_def, zero_division=0)
+    auc_default = roc_auc_score(y_test, y_prob_def)
+
+    print(f"  Default  →  F1 = {f1_default:.4f}  |  AUC = {auc_default:.4f}\n")
+
+    # ── 10b. Define search space ─────────────────────────────────────────────
+    # 3 × 4 × 3 = 36 unique combinations × 5 folds = 180 total model fits.
+    param_grid = {
+        "n_estimators"    : [100, 200, 300],
+        "max_depth"       : [None, 10, 20, 30],
+        "min_samples_split": [2, 5, 10],
+    }
+
+    skf5 = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    grid_search = GridSearchCV(
+        estimator  = RandomForestClassifier(random_state=42, n_jobs=-1),
+        param_grid = param_grid,
+        scoring    = "f1",          # optimise for F1 (best for imbalanced data)
+        cv         = skf5,          # 5-fold stratified CV inside the search
+        n_jobs     = -1,            # parallelise across all CPU cores
+        verbose    = 0,             # suppress per-fold noise
+        refit      = True           # re-fit the best model on the full X_train
+    )
+
+    # ── 10c. Run the search ──────────────────────────────────────────────────
+    print("  ⚠ Running GridSearchCV — this may take a few minutes …")
+    print(f"  Search space : {len(param_grid['n_estimators'])} n_estimators "
+          f"× {len(param_grid['max_depth'])} max_depth "
+          f"× {len(param_grid['min_samples_split'])} min_samples_split "
+          f"= 36 combinations × 5 folds = 180 fits")
+    import time
+    t0 = time.time()
+    grid_search.fit(X_train, y_train)
+    elapsed = time.time() - t0
+    print(f"  GridSearchCV completed in {elapsed:.1f}s\n")
+
+    # ── 10d. Report best parameters ──────────────────────────────────────────
+    best_params = grid_search.best_params_
+    best_cv_f1  = grid_search.best_score_
+    print("  Best parameters found:")
+    for k, v in best_params.items():
+        print(f"    {k:<22} : {v}")
+    print(f"  Best CV F1 (5-fold)  : {best_cv_f1:.4f}\n")
+
+    # ── 10e. Evaluate the tuned model on the test set ────────────────────────
+    rf_tuned   = grid_search.best_estimator_   # already refitted by GridSearchCV
+    y_pred_tun = rf_tuned.predict(X_test)
+    y_prob_tun = rf_tuned.predict_proba(X_test)[:, 1]
+    f1_tuned   = f1_score    (y_test, y_pred_tun, zero_division=0)
+    auc_tuned  = roc_auc_score(y_test, y_prob_tun)
+
+    # ── 10f. Before / After table ────────────────────────────────────────────
+    sep = "=" * 62
+    print(sep)
+    print("  HYPERPARAMETER TUNING — Before vs After  (Random Forest)")
+    print(sep)
+    print(f"  {'Configuration':<28} {'F1':>8}  {'AUC':>8}")
+    print("  " + "-" * 48)
+    df1 = f1_tuned  - f1_default
+    da  = auc_tuned - auc_default
+    s1  = "+" if df1 >= 0 else ""
+    sa  = "+" if da  >= 0 else ""
+    print(f"  {'Default  (n=100, depth=None, mss=2)':<28} {f1_default:>8.4f}  {auc_default:>8.4f}")
+    print(f"  {'Tuned    (GridSearchCV best)':<28} {f1_tuned:>8.4f}  {auc_tuned:>8.4f}")
+    print(f"  {'Δ (Tuned − Default)':<28} {s1}{df1:>7.4f}  {sa}{da:>7.4f}")
+    print(sep + "\n")
+
+    # ── 10g. Save bar chart comparing default vs tuned F1 and AUC ───────────
+    plot_hyperparameter_tuning(
+        f1_default, f1_tuned, auc_default, auc_tuned, best_params, plots_dir
+    )
+
+    return rf_tuned
+
+
+def plot_hyperparameter_tuning(
+    f1_default:  float, f1_tuned:   float,
+    auc_default: float, auc_tuned:  float,
+    best_params: dict,  plots_dir:  str
+) -> None:
+    """
+    Grouped bar chart: Default vs Tuned Random Forest — F1 and AUC side-by-side.
+    Saved to plots/hyperparameter_tuning.png.
+    """
+    metrics     = ["F1-Score", "ROC-AUC"]
+    val_default = [f1_default,  auc_default]
+    val_tuned   = [f1_tuned,    auc_tuned]
+
+    x   = np.arange(len(metrics))
+    w   = 0.33
+    clr_d = "#e74c3c"   # red   — default
+    clr_t = "#2ecc71"   # green — tuned
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    bars_d = ax.bar(x - w/2, val_default, w,
+                    label="Default (n=100, depth=None, mss=2)",
+                    color=clr_d, alpha=0.85, edgecolor="black")
+    bars_t = ax.bar(x + w/2, val_tuned,   w,
+                    label="Tuned  (GridSearchCV best)",
+                    color=clr_t, alpha=0.85, edgecolor="black")
+
+    # Annotate bars.
+    for bar in list(bars_d) + list(bars_t):
+        h = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                h + 0.005, f"{h:.4f}",
+                ha="center", va="bottom", fontsize=10, fontweight="bold")
+
+    # Build a subtitle showing the best params found.
+    param_str = (f"Best params  →  n_estimators={best_params['n_estimators']}  "
+                 f"max_depth={best_params['max_depth']}  "
+                 f"min_samples_split={best_params['min_samples_split']}")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics, fontsize=12)
+    ax.set_ylabel("Score", fontsize=12)
+    ax.set_ylim(0, min(1.0, max(val_default + val_tuned) * 1.18))
+    ax.set_title(
+        "Random Forest — Default vs Tuned Hyperparameters\n" + param_str,
+        fontsize=12, fontweight="bold"
+    )
+    ax.legend(fontsize=10)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    hp_path = os.path.join(plots_dir, "hyperparameter_tuning.png")
+    _save_and_show(fig, hp_path, "[Plot 7]")
+    print(f"  Hyperparameter tuning chart saved → {hp_path}\n")
+
+
+# =============================================================================
 # MAIN — PIPELINE ORCHESTRATOR
 # =============================================================================
 
 def main():
     """
     Runs the complete defect prediction pipeline end-to-end:
-      Load → Preprocess → Cross-Validate → Split →
-      Train → Evaluate → SMOTE → Retrain → Compare → Visualize
+      Load → EDA → Preprocess → Cross-Validate → Split →
+      Tune (GridSearchCV) → Train → Evaluate → SMOTE → Retrain → Compare → Visualize
     """
     print("\n" + "=" * 62)
     print("  SOFTWARE DEFECT PREDICTION  —  6th Semester Mini-Project")
@@ -981,6 +1402,10 @@ def main():
     # ── Step 1: Load ──────────────────────────────────────────────────────
     df = load_data(DATA_PATH)
 
+    # ── Step 0: EDA (runs right after loading, before preprocessing) ──────
+    # Provides visual and statistical understanding of the raw data.
+    run_eda(df, PLOTS_DIR)
+
     # ── Step 2: Preprocess ────────────────────────────────────────────────
     # Now also returns feature_names (needed for the importance plot).
     X, y, feature_names = preprocess_data(df, target_col="defects")
@@ -991,11 +1416,19 @@ def main():
     # ── Step 4: Train/Test Split ──────────────────────────────────────────
     X_train, X_test, y_train, y_test = split_data(X, y)
 
+    # ── Step 10: Hyperparameter Tuning — GridSearchCV (Random Forest only) ─
+    # Returns the TUNED Random Forest (best params from GridSearchCV),
+    # which is then used as the RF model for all downstream evaluation.
+    rf_tuned = tune_random_forest(
+        X_train, y_train, X_test, y_test, PLOTS_DIR
+    )
+
     # ── Step 5: Train baseline models ─────────────────────────────────────
+    # NOTE: Random Forest now uses the GridSearchCV-tuned model.
     print("=" * 62)
     print("  STEP 5 — BASELINE MODEL TRAINING")
     print("=" * 62)
-    rf_model  = train_random_forest(X_train, y_train)
+    rf_model  = rf_tuned                                    # tuned RF
     gnb_model = train_naive_bayes(X_train, y_train)
     lr_model  = train_logistic_regression(X_train, y_train)
 
@@ -1033,8 +1466,11 @@ def main():
     print_smote_comparison(before_results, after_results)
 
     # ── Step 9: Visualizations ────────────────────────────────────────────
+    # NOTE: Plot 7 (hyperparameter tuning) was already saved in Step 10.
+    #       EDA plots (EDA 1-3) were saved in Step 0.
+    #       This step generates the remaining 6 core pipeline plots.
     print("=" * 62)
-    print("  STEP 9 — GENERATING VISUALIZATIONS  (6 plots)")
+    print("  STEP 9 — GENERATING VISUALIZATIONS  (6 core plots)")
     print("=" * 62)
 
     plot_class_distribution(y, PLOTS_DIR)
@@ -1044,7 +1480,9 @@ def main():
     plot_roc_curves(before_results, y_test, PLOTS_DIR)
     plot_smote_comparison(before_results, after_results, PLOTS_DIR)
 
-    print(f"\n  All 6 plots saved to: {PLOTS_DIR}")
+    print(f"\n  Core plots (1-6) saved to    : {PLOTS_DIR}")
+    print(f"  Hyperparameter tuning plot   : {os.path.join(PLOTS_DIR, 'hyperparameter_tuning.png')}")
+    print(f"  EDA plots (3)                : {os.path.join(PLOTS_DIR, 'eda', '')}")
     print("\n  [DONE] Pipeline complete.\n")
 
 
