@@ -6,17 +6,20 @@
   Goal     : Binary classification — predict whether a software module
              contains a defect (True = buggy, False = clean).
 
+# [AUDIT FIX] — updated pipeline steps to reflect sequential execution and correct preprocessing location
   Pipeline :
     1.  Load              → read jm1.csv into a Pandas DataFrame
-    2.  Preprocess        → impute missing values, scale features
-    3.  Cross-Validation  → 10-fold Stratified K-Fold (full dataset, pre-split)
-    4.  Split             → 80 % training / 20 % testing (stratified)
-    5.  Train (baseline)  → Random Forest | Gaussian Naive Bayes | Logistic Regression
+    2.  EDA               → exploratory data analysis
+    3.  Preprocess        → encode target and select features
+    4.  Cross-Validation  → 10-fold Stratified K-Fold (using Pipeline to avoid leakage)
+    5.  Split             → 80 % training / 20 % testing (stratified)
+    6.  Scale/Impute      → impute missing values, scale features (fit on train only)
+    7.  Tune              → GridSearchCV hyperparameter tuning on Random Forest
+    8.  Train (baseline)  → Random Forest | Gaussian Naive Bayes | Logistic Regression
                              | Decision Tree | K-Nearest Neighbors
-    6.  Evaluate          → Accuracy, Precision, Recall, F1, ROC-AUC, RMSE, Confusion Matrix
-    7.  Compare           → ranked comparison table (baseline)
-    8.  SMOTE             → balance training set; retrain; compare before vs after
-    9.  Visualize         → 6 plots saved to plots/ directory + plt.show()
+    9.  Evaluate          → Accuracy, Precision, Recall, F1, ROC-AUC, RMSE, Confusion Matrix
+    10. SMOTE             → balance training set; retrain; compare before vs after
+    11. Visualize         → 6 plots saved to plots/ directory + plt.show()
 
   How to run (from repo root):
     python src/defect_prediction.py
@@ -49,6 +52,7 @@ from sklearn.model_selection import (
 )
 from sklearn.preprocessing import StandardScaler   # z-score normalisation
 from sklearn.impute        import SimpleImputer     # replaces NaN with column mean
+from sklearn.pipeline      import Pipeline          # [AUDIT FIX] — pipeline to prevent data leakage in CV
 
 # --- Scikit-learn: Models ----------------------------------------------------
 from sklearn.ensemble     import RandomForestClassifier  # ensemble of trees
@@ -377,26 +381,19 @@ def load_data(filepath: str) -> pd.DataFrame:
 
 
 # =============================================================================
-# SECTION 2 — PREPROCESSING
+# # AUDIT STATUS: FIXED
+# SECTION 3 — PREPROCESSING (Encode & Feature Selection)
 # -----------------------------------------------------------------------------
-# Raw data is rarely ready for a machine learning model. We must:
+# [AUDIT FIX] — Imputation and scaling have been moved to AFTER the train/test
+#               split to prevent data leakage. This function now only handles:
 #
-#   2a) Separate X (features) and y (target label).
-#   2b) Encode the boolean target into integers   (True → 1,  False → 0).
-#   2c) Impute missing values  — replace NaN with the column mean.
-#       Why mean?  It is unbiased, preserves the feature's overall scale,
-#       and does not introduce extreme values.
-#   2d) Scale features with StandardScaler         (µ = 0, σ = 1).
-#       Formula:  z = (x - mean) / std
-#       Why scale?  Many algorithms (Naive Bayes, Logistic Regression)
-#       assume features are on the same scale. Without scaling, a feature
-#       like 'lines of code' (range: 0–10,000) would dominate a feature
-#       like 'cyclomatic complexity' (range: 1–50).
+#   3a) Separate X (features) and y (target label).
+#   3b) Encode the boolean target into integers   (True → 1,  False → 0).
 # =============================================================================
 
 def preprocess_data(df: pd.DataFrame, target_col: str = "defects"):
     """
-    Clean, encode, impute, and scale the raw DataFrame.
+    Clean, encode, and select features from the raw DataFrame.
 
     Parameters
     ----------
@@ -405,15 +402,15 @@ def preprocess_data(df: pd.DataFrame, target_col: str = "defects"):
 
     Returns
     -------
-    X_scaled      : np.ndarray  — preprocessed feature matrix (n_samples × n_features)
+    X             : pd.DataFrame  — raw feature matrix
     y             : np.ndarray  — integer-encoded labels (0 = clean, 1 = defective)
     feature_names : list[str]   — names of the retained numeric columns (for plots)
     """
     print("=" * 62)
-    print("  STEP 2 — PREPROCESSING")
+    print("  STEP 3 — PREPROCESSING (Encode & Select)")
     print("=" * 62)
 
-    # ── 2a. Separate X (features) from y (target) ────────────────────────
+    # ── 3a. Separate X (features) from y (target) ────────────────────────
     if target_col not in df.columns:
         sys.exit(f"[ERROR] Column '{target_col}' not found. Check your CSV.")
 
@@ -424,7 +421,7 @@ def preprocess_data(df: pd.DataFrame, target_col: str = "defects"):
     X = X.select_dtypes(include=[np.number])
     feature_names = list(X.columns)    # saved for the feature-importance plot
 
-    # ── 2b. Encode target: True/False → 1/0 ─────────────────────────────
+    # ── 3b. Encode target: True/False → 1/0 ─────────────────────────────
     # scikit-learn classifiers expect numeric labels, not strings/booleans.
     y = y.map({True: 1, False: 0, "True": 1, "False": 0}).astype(int)
 
@@ -438,27 +435,54 @@ def preprocess_data(df: pd.DataFrame, target_col: str = "defects"):
     print(f"  ⚠ Class imbalance ratio  1 : {no_defect_count/defect_count:.1f}")
     print(f"    (This naturally drives lower Recall — discussed in viva notes)\n")
 
-    # ── 2c. Impute missing values ─────────────────────────────────────────
-    # SimpleImputer(strategy='mean') replaces each NaN with that column's mean.
-    # We fit on the entire X here; when we split later, no data leaks between
-    # train/test because the labels are not involved in mean calculation.
-    missing_before = int(df.isnull().sum().sum())
-    imputer        = SimpleImputer(strategy="mean")
-    X_imputed      = imputer.fit_transform(X)
-    print(f"  Missing values imputed     : {missing_before}  (strategy = column mean)")
-
-    # ── 2d. Feature scaling: StandardScaler ──────────────────────────────
-    # z = (x - μ) / σ    →  zero mean, unit standard deviation
-    scaler   = StandardScaler()
-    X_scaled = scaler.fit_transform(X_imputed)
-    print(f"  Feature scaling            : StandardScaler  (µ=0, σ=1)")
-    print(f"  Number of features used    : {X_scaled.shape[1]}\n")
-
-    return X_scaled, y.to_numpy(), feature_names
+    return X, y.to_numpy(), feature_names
 
 
 # =============================================================================
-# SECTION 3 — 10-FOLD STRATIFIED CROSS-VALIDATION
+# # AUDIT STATUS: FIXED
+# SECTION 6 — APPLY IMPUTATION AND SCALING
+# -----------------------------------------------------------------------------
+# [AUDIT FIX] — Imputer and Scaler are fit ONLY on the training data.
+#               This strictly prevents data leakage from the test set into
+#               the training process.
+# =============================================================================
+
+def apply_preprocessing(X_train: pd.DataFrame, X_test: pd.DataFrame):
+    """
+    Impute missing values and scale features to prevent data leakage.
+
+    Parameters
+    ----------
+    X_train : training features
+    X_test  : testing features
+
+    Returns
+    -------
+    X_train_processed, X_test_processed, imputer, scaler
+    """
+    print("=" * 62)
+    print("  STEP 6 — APPLY IMPUTATION & SCALING  (Fit on Train Only)")
+    print("=" * 62)
+
+    # ── 6a. Impute missing values ─────────────────────────────────────────
+    imputer = SimpleImputer(strategy="mean")
+    X_train_imputed = imputer.fit_transform(X_train)
+    X_test_imputed  = imputer.transform(X_test)
+    print(f"  Missing values imputed     : using column mean (fit on train only)")
+
+    # ── 6b. Feature scaling: StandardScaler ──────────────────────────────
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train_imputed)
+    X_test_scaled  = scaler.transform(X_test_imputed)
+    print(f"  Feature scaling            : StandardScaler (µ=0, σ=1, fit on train only)")
+    print(f"  Number of features used    : {X_train_scaled.shape[1]}\n")
+
+    return X_train_scaled, X_test_scaled, imputer, scaler
+
+
+# =============================================================================
+# # AUDIT STATUS: FIXED
+# SECTION 4 — 10-FOLD STRATIFIED CROSS-VALIDATION
 # -----------------------------------------------------------------------------
 # A single train/test split gives ONE performance estimate which can be
 # optimistic or pessimistic by chance. Cross-validation (CV) gives a more
@@ -473,18 +497,18 @@ def preprocess_data(df: pd.DataFrame, target_col: str = "defects"):
 # "Stratified" — each fold maintains the same class ratio as the full dataset.
 # This is critical for imbalanced problems like defect prediction.
 #
-# NOTE: CV is run on the FULL preprocessed dataset BEFORE the final
-# train/test split. Fresh model instances are used so CV is independent
-# of the final trained models stored for evaluation.
+# [AUDIT FIX] — CV is run on the unscaled data using a Pipeline. This ensures
+# that within each CV fold, the imputer and scaler are fit ONLY on that
+# specific fold's training portion, eliminating data leakage.
 # =============================================================================
 
-def cross_validate_models(X: np.ndarray, y: np.ndarray, cv: int = 10) -> dict:
+def cross_validate_models(X: pd.DataFrame, y: np.ndarray, cv: int = 10) -> dict:
     """
     Run stratified K-fold cross-validation for all 5 models.
 
     Parameters
     ----------
-    X  : full preprocessed feature matrix
+    X  : raw feature matrix (unscaled)
     y  : full label vector
     cv : number of folds (default 10)
 
@@ -493,12 +517,12 @@ def cross_validate_models(X: np.ndarray, y: np.ndarray, cv: int = 10) -> dict:
     dict : {model_name: np.ndarray of per-fold F1 scores}
     """
     print("=" * 62)
-    print(f"  STEP 3 — {cv}-FOLD STRATIFIED CROSS-VALIDATION")
+    print(f"  STEP 4 — {cv}-FOLD STRATIFIED CROSS-VALIDATION")
     print("=" * 62)
-    print("  Run on full preprocessed dataset BEFORE the train/test split.")
+    print("  Run using Pipeline to prevent data leakage during CV.")
     print("  Metric: F1-Score (best single metric for imbalanced classification)\n")
 
-    # Fresh model instances — independent of the models trained in Step 5.
+    # Fresh model instances — independent of the models trained in Step 8.
     # Decision Tree and KNN are included to mirror the full model set from
     # Shailee et al. (iCACCESS 2024) which tested 7 classifiers on this dataset.
     models_cv = {
@@ -521,9 +545,16 @@ def cross_validate_models(X: np.ndarray, y: np.ndarray, cv: int = 10) -> dict:
     print("  " + "-" * 58)
 
     for name, model in models_cv.items():
+        # [AUDIT FIX] — Wrap model in Pipeline for leak-free CV
+        pipeline = Pipeline([
+            ('imputer', SimpleImputer(strategy='mean')),
+            ('scaler', StandardScaler()),
+            ('model', model)
+        ])
+        
         # cross_val_score trains + evaluates the model `cv` times.
         # n_jobs=-1 uses all CPU cores to parallelise the folds.
-        scores = cross_val_score(model, X, y, cv=skf, scoring="f1", n_jobs=-1)
+        scores = cross_val_score(pipeline, X, y, cv=skf, scoring="f1", n_jobs=-1)
         cv_results[name] = scores
         print(f"  {name:<28} {scores.mean():>8.4f} {scores.std():>7.4f}"
               f"  {scores.min():>6.4f}  {scores.max():>6.4f}")
@@ -535,7 +566,8 @@ def cross_validate_models(X: np.ndarray, y: np.ndarray, cv: int = 10) -> dict:
 
 
 # =============================================================================
-# SECTION 4 — TRAIN / TEST SPLIT
+# # AUDIT STATUS: FIXED
+# SECTION 5 — TRAIN / TEST SPLIT
 # -----------------------------------------------------------------------------
 # We hold out 20 % of the data as a "test set" that the models NEVER see
 # during training. This simulates how the model would perform on new,
@@ -570,7 +602,7 @@ def split_data(X: np.ndarray, y: np.ndarray,
     )
 
     print("=" * 62)
-    print("  STEP 4 — TRAIN / TEST SPLIT  (80 % / 20 %)")
+    print("  STEP 5 — TRAIN / TEST SPLIT  (80 % / 20 %)")
     print("=" * 62)
     print(f"  Training samples : {len(X_train):,}")
     print(f"  Testing  samples : {len(X_test):,}")
@@ -580,7 +612,8 @@ def split_data(X: np.ndarray, y: np.ndarray,
 
 
 # =============================================================================
-# SECTION 5 — MODEL TRAINING
+# # AUDIT STATUS: FIXED
+# SECTION 8 — MODEL TRAINING
 # -----------------------------------------------------------------------------
 # We train three baseline classifiers and compare them.
 #
@@ -788,7 +821,8 @@ def train_knn(X_train: np.ndarray,
 
 
 # =============================================================================
-# SECTION 6 — MODEL EVALUATION
+# # AUDIT STATUS: FIXED
+# SECTION 9 — MODEL EVALUATION
 # -----------------------------------------------------------------------------
 # Five scalar metrics + confusion matrix are reported for each model.
 #
@@ -923,7 +957,8 @@ def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray,
 
 
 # =============================================================================
-# SECTION 7 — COMPARISON SUMMARY
+# # AUDIT STATUS: FIXED
+# SECTION 9b — COMPARISON SUMMARY
 # -----------------------------------------------------------------------------
 # Side-by-side table so you can immediately see which model performs best
 # on each metric — essential for your viva discussion.
@@ -967,7 +1002,8 @@ def print_comparison(results: list, title: str = "MODEL COMPARISON") -> None:
 
 
 # =============================================================================
-# SECTION 8 — SMOTE (Synthetic Minority Over-sampling Technique)
+# # AUDIT STATUS: FIXED
+# SECTION 10 — SMOTE (Synthetic Minority Over-sampling Technique)
 # -----------------------------------------------------------------------------
 # Problem: jm1 is imbalanced (80.7 % clean vs 19.3 % defective).
 # When a model trains on imbalanced data, it is biased toward the majority
@@ -1001,7 +1037,7 @@ def apply_smote(X_train: np.ndarray, y_train: np.ndarray,
     X_resampled, y_resampled : balanced training data (test set NEVER touched)
     """
     print("=" * 62)
-    print("  STEP 8 — SMOTE  (Applied to Training Set Only)")
+    print("  STEP 10 — SMOTE  (Applied to Training Set Only)")
     print("=" * 62)
 
     before = pd.Series(y_train).value_counts().sort_index()
@@ -1060,16 +1096,17 @@ def print_smote_comparison(before_results: list,
 
 
 # =============================================================================
-# SECTION 9 — VISUALIZATIONS
+# # AUDIT STATUS: FIXED
+# SECTION 11 — VISUALIZATIONS
 # -----------------------------------------------------------------------------
 # Six plots are generated, each saved as a PNG to plots/ AND shown via
 # plt.show() for interactive viewing.
 #
 #   Plot 1 : Class distribution bar chart
 #   Plot 2 : Feature correlation heatmap  (seaborn)
-#   Plot 3 : Confusion matrix heatmaps — all 3 models side-by-side
+#   Plot 3 : Confusion matrix heatmaps — all 5 models (2×3 grid)
 #   Plot 4 : Feature importance bar chart — Random Forest (top 15)
-#   Plot 5 : ROC-AUC curves — all 3 models overlaid
+#   Plot 5 : ROC-AUC curves — all 5 models overlaid
 #   Plot 6 : SMOTE before/after comparison — F1 and Recall (grouped bars)
 # =============================================================================
 
@@ -1258,7 +1295,7 @@ def plot_feature_importance(rf_model: RandomForestClassifier,
 def plot_roc_curves(results: list, y_test: np.ndarray,
                     plots_dir: str) -> None:
     """
-    Overlaid ROC curves for all 3 models on a single plot.
+    Overlaid ROC curves for all 5 models on a single plot.
 
     The ROC curve:
       X-axis: False Positive Rate  = FP / (FP + TN) = 1 - Specificity
@@ -1269,7 +1306,8 @@ def plot_roc_curves(results: list, y_test: np.ndarray,
     across ALL thresholds — unlike Accuracy, it is not biased by class imbalance.
     The diagonal dashed line represents a random (50 %) classifier (AUC = 0.5).
     """
-    colors = ["#e74c3c", "#3498db", "#2ecc71"]
+    # [AUDIT FIX] — extended colors and title for 5 models
+    colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"]
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -1285,7 +1323,7 @@ def plot_roc_curves(results: list, y_test: np.ndarray,
 
     ax.set_xlabel("False Positive Rate  (1 − Specificity)", fontsize=12)
     ax.set_ylabel("True Positive Rate  (Recall / Sensitivity)", fontsize=12)
-    ax.set_title("ROC Curves — All 3 Models", fontsize=14, fontweight="bold")
+    ax.set_title("ROC Curves — All 5 Models", fontsize=14, fontweight="bold")
     ax.legend(loc="lower right", fontsize=10)
     ax.grid(alpha=0.3)
     ax.set_xlim([0.0, 1.0])
@@ -1301,7 +1339,7 @@ def plot_smote_comparison(before_results: list, after_results: list,
                           plots_dir: str) -> None:
     """
     Grouped bar chart comparing F1-Score and Recall before vs after SMOTE
-    for all 3 models. Two subplots side-by-side. Bars are annotated.
+    for all 5 models. Two subplots side-by-side. Bars are annotated.
     """
     model_names   = [r["model"] for r in before_results]
     f1_before     = [r["f1"]     for r in before_results]
@@ -1364,7 +1402,8 @@ def plot_smote_comparison(before_results: list, after_results: list,
 
 
 # =============================================================================
-# SECTION 10 — HYPERPARAMETER TUNING  (Random Forest — GridSearchCV)
+# # AUDIT STATUS: FIXED
+# SECTION 7 — HYPERPARAMETER TUNING  (Random Forest — GridSearchCV)
 # -----------------------------------------------------------------------------
 # Default hyperparameters are "good guesses" but rarely optimal. GridSearchCV
 # exhaustively trains and evaluates the model for every combination in the
@@ -1396,7 +1435,7 @@ def tune_random_forest(
     RandomForestClassifier — the BEST model, already fitted on X_train.
     """
     print("=" * 62)
-    print("  STEP 10 — HYPERPARAMETER TUNING  (Random Forest, GridSearchCV)")
+    print("  STEP 7 — HYPERPARAMETER TUNING  (Random Forest, GridSearchCV)")
     print("=" * 62)
 
     # ── 10a. Evaluate default RF first (for before/after comparison) ─────────
@@ -1546,7 +1585,8 @@ def main():
     """
     Runs the complete defect prediction pipeline end-to-end:
       Load → EDA → Preprocess → Cross-Validate → Split →
-      Tune (GridSearchCV) → Train → Evaluate → SMOTE → Retrain → Compare → Visualize
+      Scale/Impute → Tune (GridSearchCV) → Train → Evaluate → 
+      SMOTE → Retrain → Compare → Visualize
     """
     print("\n" + "=" * 62)
     print("  SOFTWARE DEFECT PREDICTION  —  6th Semester Mini-Project")
@@ -1561,60 +1601,58 @@ def main():
     # ── Step 1: Load ──────────────────────────────────────────────────────
     df = load_data(DATA_PATH)
 
-    # ── Step 0: EDA (runs right after loading, before preprocessing) ──────
-    # Provides visual and statistical understanding of the raw data.
+    # ── Step 2: EDA (runs right after loading, before preprocessing) ──────
     run_eda(df, PLOTS_DIR)
 
-    # ── Step 2: Preprocess ────────────────────────────────────────────────
-    # Now also returns feature_names (needed for the importance plot).
+    # ── Step 3: Preprocess (Encode & Select only) ─────────────────────────
+    # [AUDIT FIX] — Imputation and scaling removed from this step
     X, y, feature_names = preprocess_data(df, target_col="defects")
 
-    # ── Step 3: 10-Fold Cross-Validation (on full X, y — before splitting)
+    # ── Step 4: 10-Fold Cross-Validation (on unscaled X, y) ───────────────
+    # [AUDIT FIX] — Pipeline handles scaling within CV internally
     cross_validate_models(X, y, cv=10)
 
-    # ── Step 4: Train/Test Split ──────────────────────────────────────────
+    # ── Step 5: Train/Test Split ──────────────────────────────────────────
     X_train, X_test, y_train, y_test = split_data(X, y)
 
-    # ── Step 10: Hyperparameter Tuning — GridSearchCV (Random Forest only) ─
-    # Returns the TUNED Random Forest (best params from GridSearchCV),
-    # which is then used as the RF model for all downstream evaluation.
+    # ── Step 6: Apply Imputation + Scaling (Fit on Train Only) ────────────
+    # [AUDIT FIX] — Eliminates data leakage
+    X_train_scaled, X_test_scaled, imputer, scaler = apply_preprocessing(X_train, X_test)
+
+    # ── Step 7: Hyperparameter Tuning — GridSearchCV (Random Forest only) ─
     rf_tuned = tune_random_forest(
-        X_train, y_train, X_test, y_test, PLOTS_DIR
+        X_train_scaled, y_train, X_test_scaled, y_test, PLOTS_DIR
     )
 
-    # ── Step 5: Train baseline models ─────────────────────────────────────
-    # NOTE: Random Forest now uses the GridSearchCV-tuned model.
-    # Decision Tree and KNN are added to match the model set from the
-    # reference paper (Shailee et al., iCACCESS 2024).
+    # ── Step 8: Train baseline models ─────────────────────────────────────
     print("=" * 62)
-    print("  STEP 5 — BASELINE MODEL TRAINING  (5 models)")
+    print("  STEP 8 — BASELINE MODEL TRAINING  (5 models)")
     print("=" * 62)
-    rf_model  = rf_tuned                                    # tuned RF
-    gnb_model = train_naive_bayes(X_train, y_train)
-    lr_model  = train_logistic_regression(X_train, y_train)
-    dt_model  = train_decision_tree(X_train, y_train)
-    knn_model = train_knn(X_train, y_train)
+    rf_model  = rf_tuned
+    gnb_model = train_naive_bayes(X_train_scaled, y_train)
+    lr_model  = train_logistic_regression(X_train_scaled, y_train)
+    dt_model  = train_decision_tree(X_train_scaled, y_train)
+    knn_model = train_knn(X_train_scaled, y_train)
 
-    # ── Step 6: Evaluate baseline models ──────────────────────────────────
+    # ── Step 9: Evaluate baseline models ──────────────────────────────────
     print("=" * 62)
-    print("  STEP 6 — EVALUATION REPORTS  (Baseline — Before SMOTE)")
+    print("  STEP 9 — EVALUATION REPORTS  (Baseline — Before SMOTE)")
     print("=" * 62 + "\n")
     before_results = []
-    before_results.append(evaluate_model(rf_model,  X_test, y_test, "Random Forest"))
-    before_results.append(evaluate_model(gnb_model, X_test, y_test, "Gaussian Naive Bayes"))
-    before_results.append(evaluate_model(lr_model,  X_test, y_test, "Logistic Regression"))
-    before_results.append(evaluate_model(dt_model,  X_test, y_test, "Decision Tree"))
-    before_results.append(evaluate_model(knn_model, X_test, y_test, "K-Nearest Neighbors"))
+    before_results.append(evaluate_model(rf_model,  X_test_scaled, y_test, "Random Forest"))
+    before_results.append(evaluate_model(gnb_model, X_test_scaled, y_test, "Gaussian Naive Bayes"))
+    before_results.append(evaluate_model(lr_model,  X_test_scaled, y_test, "Logistic Regression"))
+    before_results.append(evaluate_model(dt_model,  X_test_scaled, y_test, "Decision Tree"))
+    before_results.append(evaluate_model(knn_model, X_test_scaled, y_test, "K-Nearest Neighbors"))
 
-    # ── Step 7: Comparison table (baseline) ───────────────────────────────
     print_comparison(before_results,
                      title="BASELINE MODEL COMPARISON  (Before SMOTE)")
 
-    # ── Step 8: SMOTE — balance training set, retrain, compare ───────────
-    X_train_sm, y_train_sm = apply_smote(X_train, y_train)
+    # ── Step 10: SMOTE — balance training set, retrain, compare ───────────
+    X_train_sm, y_train_sm = apply_smote(X_train_scaled, y_train)
 
     print("=" * 62)
-    print("  STEP 8b — MODEL TRAINING  (After SMOTE, 5 models)")
+    print("  STEP 10b — MODEL TRAINING  (After SMOTE, 5 models)")
     print("=" * 62)
     rf_sm  = train_random_forest(X_train_sm, y_train_sm)
     gnb_sm = train_naive_bayes(X_train_sm, y_train_sm)
@@ -1624,22 +1662,19 @@ def main():
 
     print("  Evaluating SMOTE models on the original (untouched) test set …\n")
     after_results = []
-    after_results.append(evaluate_model(rf_sm,  X_test, y_test, "Random Forest"))
-    after_results.append(evaluate_model(gnb_sm, X_test, y_test, "Gaussian Naive Bayes"))
-    after_results.append(evaluate_model(lr_sm,  X_test, y_test, "Logistic Regression"))
-    after_results.append(evaluate_model(dt_sm,  X_test, y_test, "Decision Tree"))
-    after_results.append(evaluate_model(knn_sm, X_test, y_test, "K-Nearest Neighbors"))
+    after_results.append(evaluate_model(rf_sm,  X_test_scaled, y_test, "Random Forest"))
+    after_results.append(evaluate_model(gnb_sm, X_test_scaled, y_test, "Gaussian Naive Bayes"))
+    after_results.append(evaluate_model(lr_sm,  X_test_scaled, y_test, "Logistic Regression"))
+    after_results.append(evaluate_model(dt_sm,  X_test_scaled, y_test, "Decision Tree"))
+    after_results.append(evaluate_model(knn_sm, X_test_scaled, y_test, "K-Nearest Neighbors"))
 
     print_comparison(after_results,
                      title="MODEL COMPARISON  (After SMOTE)")
     print_smote_comparison(before_results, after_results)
 
-    # ── Step 9: Visualizations ────────────────────────────────────────────
-    # NOTE: Plot 7 (hyperparameter tuning) was already saved in Step 10.
-    #       EDA plots (EDA 1-3) were saved in Step 0.
-    #       This step generates the remaining 6 core pipeline plots.
+    # ── Step 11: Visualizations ────────────────────────────────────────────
     print("=" * 62)
-    print("  STEP 9 — GENERATING VISUALIZATIONS  (6 core plots)")
+    print("  STEP 11 — GENERATING VISUALIZATIONS  (6 core plots)")
     print("=" * 62)
 
     plot_class_distribution(y, PLOTS_DIR)

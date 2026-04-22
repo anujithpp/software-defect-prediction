@@ -111,8 +111,8 @@ All plots are saved to `plots/` and displayed interactively.
 | 🥇 | **Random Forest** | 80.98 % | 51.78 % | 24.23 % | **33.01 %** | **0.7174** | 0.4357 |
 | 🥈 | Gaussian Naive Bayes | 80.20 % | 47.60 % | 23.52 % | 31.48 % | 0.6758 | 0.4451 |
 | 🥉 | Logistic Regression | 80.98 % | 53.54 % | 12.59 % | 20.38 % | 0.6928 | 0.4357 |
-| 4 | Decision Tree | — | — | — | — | — | — |
-| 5 | K-Nearest Neighbors | — | — | — | — | — | — |
+| 4 | Decision Tree | 74.28 % | 33.95 % | 34.92 % | 34.43 % | 0.5727 | 0.5072 |
+| 5 | K-Nearest Neighbors | 79.01 % | 43.18 % | 27.08 % | 33.28 % | 0.6836 | 0.4582 |
 
 ### After SMOTE
 
@@ -121,8 +121,8 @@ All plots are saved to `plots/` and displayed interactively.
 | 🥇 | **Logistic Regression** | 69.36 % | 33.01 % | 56.77 % | **41.75 %** | 0.6945 | 0.5533 |
 | 🥈 | Random Forest | 77.95 % | 42.38 % | 38.95 % | 40.59 % | **0.7337** | 0.4706 |
 | 🥉 | Gaussian Naive Bayes | 79.79 % | 45.74 % | 24.23 % | 31.68 % | 0.6765 | 0.4496 |
-| 4 | Decision Tree | — | — | — | — | — | — |
-| 5 | K-Nearest Neighbors | — | — | — | — | — | — |
+| 4 | Decision Tree | 74.55 % | 36.17 % | 41.33 % | 38.58 % | 0.6053 | 0.5045 |
+| 5 | K-Nearest Neighbors | 66.15 % | 30.10 % | 56.77 % | 39.34 % | 0.6814 | 0.5818 |
 
 > **Note on RMSE:** Although RMSE is conventionally a regression metric, it is valid for binary classifiers because `y` and `ŷ` are 0/1 integers.
 > It simplifies to `sqrt(error_rate)`, which penalises large misclassification counts
@@ -135,13 +135,12 @@ All plots are saved to `plots/` and displayed interactively.
 | Logistic Regression | **+0.2136** | **+0.4418** |
 | Random Forest | +0.0758 | +0.1473 |
 | Gaussian Naive Bayes | +0.0020 | +0.0071 |
-| Decision Tree | — | — |
-| K-Nearest Neighbors | — | — |
+| Decision Tree | +0.0415 | +0.0641 |
+| K-Nearest Neighbors | +0.0606 | +0.2969 |
 
 > **Note:** Low baseline Recall is expected — the dataset is class-imbalanced (19.3 % defective, ratio 1:4.2).
 > SMOTE dramatically improves Recall (especially for LR) at the cost of Precision.
 > **Random Forest** leads on ROC-AUC both before and after SMOTE.
-> Rows marked **—** will be populated automatically when the pipeline is run.
 
 ---
 
