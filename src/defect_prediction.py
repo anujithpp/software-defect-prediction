@@ -12,7 +12,7 @@
     3.  Cross-Validation  → 10-fold Stratified K-Fold (full dataset, pre-split)
     4.  Split             → 80 % training / 20 % testing (stratified)
     5.  Train (baseline)  → Random Forest | Gaussian Naive Bayes | Logistic Regression
-    6.  Evaluate          → Accuracy, Precision, Recall, F1, ROC-AUC, Confusion Matrix
+    6.  Evaluate          → Accuracy, Precision, Recall, F1, ROC-AUC, RMSE, Confusion Matrix
     7.  Compare           → ranked comparison table (baseline)
     8.  SMOTE             → balance training set; retrain; compare before vs after
     9.  Visualize         → 6 plots saved to plots/ directory + plt.show()
@@ -64,6 +64,7 @@ from sklearn.metrics import (
     classification_report, # full per-class breakdown
     roc_auc_score,         # Area Under the ROC Curve
     roc_curve,             # TPR vs FPR at all thresholds (for plotting)
+    mean_squared_error,    # used to derive RMSE (see evaluate_model)
 )
 
 # --- Imbalanced-learn: SMOTE -------------------------------------------------
@@ -705,6 +706,17 @@ def train_logistic_regression(X_train: np.ndarray,
 #         AUC = 0.5 → model has no discriminatory power (random guess)
 #         AUC = 1.0 → perfect separation of classes
 #     → Threshold-independent: not biased by class imbalance.
+#
+#   RMSE       = Root Mean Squared Error  =  sqrt( mean( (y - ŷ)² ) )
+#     → Traditionally a regression metric, but valid here because y and ŷ are
+#       binary (0/1).  Squaring the errors before averaging means each
+#       misclassification always contributes 1², while correct predictions
+#       contribute 0² — so RMSE simplifies to sqrt(error_rate).
+#     → Unlike Accuracy, RMSE penalises large misclassification counts more
+#       heavily (through the squared term), making it a useful complementary
+#       indicator.  It is included because the reference paper (Shailee et al.,
+#       iCACCESS 2024) reports RMSE alongside the standard classification
+#       metrics.
 # =============================================================================
 
 def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray,
@@ -739,6 +751,13 @@ def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray,
     auc       = roc_auc_score  (y_test, y_prob)
     cm        = confusion_matrix(y_test, y_pred)
 
+    # RMSE: sqrt(mean((y - ŷ)²))
+    # Both y_test and y_pred are binary (0/1), so each error term is 0 or 1.
+    # Squaring penalises misclassifications more heavily than Accuracy does,
+    # making RMSE a useful complement — especially noted in the reference paper
+    # (Shailee et al., iCACCESS 2024) which reports this metric.
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+
     # Unpack the 2×2 confusion matrix into named variables for clarity.
     TN, FP, FN, TP = cm.ravel()
 
@@ -755,6 +774,7 @@ def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray,
     print(f"  {'Recall':<12}  {recall:>7.4f}   TP / (TP+FN)  ← most critical")
     print(f"  {'F1-Score':<12}  {f1:>7.4f}   2×(P×R)/(P+R)")
     print(f"  {'ROC-AUC':<12}  {auc:>7.4f}   threshold-independent discriminability")
+    print(f"  {'RMSE':<12}  {rmse:>7.4f}   sqrt(mean((y - ŷ)²))  [ref: Shailee et al. 2024]")
 
     # Confusion matrix (annotated with cost interpretation)
     print(f"\n  Confusion Matrix:")
@@ -779,6 +799,7 @@ def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray,
         "recall"   : recall,
         "f1"       : f1,
         "auc"      : auc,
+        "rmse"     : rmse,     # sqrt(mean((y-ŷ)²)) — from reference paper
         "TP": TP, "TN": TN, "FP": FP, "FN": FN,
         "y_prob"   : y_prob,   # stored for ROC curve plotting
     }
@@ -803,21 +824,21 @@ def print_comparison(results: list, title: str = "MODEL COMPARISON") -> None:
     # Sort by F1-Score descending — best model first.
     results_sorted = sorted(results, key=lambda r: r["f1"], reverse=True)
 
-    sep = "=" * 76
+    sep = "=" * 86
     print(sep)
     print(f"  {title}  (sorted by F1 ↓)")
     print(sep)
     header = (f"  {'Rank':<5} {'Model':<28} "
-              f"{'Accuracy':>9} {'Precision':>10} {'Recall':>7} {'F1':>7} {'AUC':>7}")
+              f"{'Accuracy':>9} {'Precision':>10} {'Recall':>7} {'F1':>7} {'AUC':>7} {'RMSE':>7}")
     print(header)
-    print("  " + "-" * 72)
+    print("  " + "-" * 82)
 
     medals = ["🥇", "🥈", "🥉"]
     for i, r in enumerate(results_sorted):
         medal = medals[i] if i < 3 else "   "
         row = (f"  {medal:<5} {r['model']:<28} "
                f"{r['accuracy']:>9.4f} {r['precision']:>10.4f} "
-               f"{r['recall']:>7.4f} {r['f1']:>7.4f} {r['auc']:>7.4f}")
+               f"{r['recall']:>7.4f} {r['f1']:>7.4f} {r['auc']:>7.4f} {r['rmse']:>7.4f}")
         print(row)
 
     print(sep)
@@ -825,7 +846,7 @@ def print_comparison(results: list, title: str = "MODEL COMPARISON") -> None:
     best = results_sorted[0]
     print(f"\n  Best model (by F1): {best['model']}")
     print(f"  F1={best['f1']:.4f}  |  Accuracy={best['accuracy']*100:.2f} %  "
-          f"|  Recall={best['recall']:.4f}  |  AUC={best['auc']:.4f}\n")
+          f"|  Recall={best['recall']:.4f}  |  AUC={best['auc']:.4f}  |  RMSE={best['rmse']:.4f}\n")
 
 
 # =============================================================================
