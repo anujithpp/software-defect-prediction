@@ -12,6 +12,7 @@
     3.  Cross-Validation  → 10-fold Stratified K-Fold (full dataset, pre-split)
     4.  Split             → 80 % training / 20 % testing (stratified)
     5.  Train (baseline)  → Random Forest | Gaussian Naive Bayes | Logistic Regression
+                             | Decision Tree | K-Nearest Neighbors
     6.  Evaluate          → Accuracy, Precision, Recall, F1, ROC-AUC, RMSE, Confusion Matrix
     7.  Compare           → ranked comparison table (baseline)
     8.  SMOTE             → balance training set; retrain; compare before vs after
@@ -53,6 +54,8 @@ from sklearn.impute        import SimpleImputer     # replaces NaN with column m
 from sklearn.ensemble     import RandomForestClassifier  # ensemble of trees
 from sklearn.naive_bayes  import GaussianNB              # Bayesian probabilistic model
 from sklearn.linear_model import LogisticRegression      # linear classifier / sigmoid
+from sklearn.tree         import DecisionTreeClassifier  # single recursive-split tree
+from sklearn.neighbors    import KNeighborsClassifier    # distance-based lazy learner
 
 # --- Scikit-learn: Evaluation ------------------------------------------------
 from sklearn.metrics import (
@@ -477,7 +480,7 @@ def preprocess_data(df: pd.DataFrame, target_col: str = "defects"):
 
 def cross_validate_models(X: np.ndarray, y: np.ndarray, cv: int = 10) -> dict:
     """
-    Run stratified K-fold cross-validation for all 3 models.
+    Run stratified K-fold cross-validation for all 5 models.
 
     Parameters
     ----------
@@ -496,6 +499,8 @@ def cross_validate_models(X: np.ndarray, y: np.ndarray, cv: int = 10) -> dict:
     print("  Metric: F1-Score (best single metric for imbalanced classification)\n")
 
     # Fresh model instances — independent of the models trained in Step 5.
+    # Decision Tree and KNN are included to mirror the full model set from
+    # Shailee et al. (iCACCESS 2024) which tested 7 classifiers on this dataset.
     models_cv = {
         "Random Forest"       : RandomForestClassifier(n_estimators=100,
                                                        random_state=42,
@@ -504,6 +509,8 @@ def cross_validate_models(X: np.ndarray, y: np.ndarray, cv: int = 10) -> dict:
         "Logistic Regression" : LogisticRegression(C=1.0, max_iter=1000,
                                                    solver="lbfgs",
                                                    random_state=42),
+        "Decision Tree"       : DecisionTreeClassifier(random_state=42),
+        "K-Nearest Neighbors" : KNeighborsClassifier(n_neighbors=5, n_jobs=-1),
     }
 
     # StratifiedKFold preserves class ratio in every fold.
@@ -616,7 +623,7 @@ def train_random_forest(X_train: np.ndarray, y_train: np.ndarray,
     random_state : makes bootstrap sampling reproducible.
     n_jobs = -1  : use ALL available CPU cores in parallel.
     """
-    print("  [1/3] Training Random Forest Classifier ...", end=" ", flush=True)
+    print("  [1/5] Training Random Forest Classifier ...", end=" ", flush=True)
     model = RandomForestClassifier(
         n_estimators = n_estimators,
         random_state = random_state,
@@ -636,7 +643,7 @@ def train_naive_bayes(X_train: np.ndarray,
     variance of each feature per class directly from training data.
     This makes it extremely fast but also less flexible than RF or LR.
     """
-    print("  [2/3] Training Gaussian Naive Bayes   ...", end=" ", flush=True)
+    print("  [2/5] Training Gaussian Naive Bayes   ...", end=" ", flush=True)
     model = GaussianNB()
     model.fit(X_train, y_train)
     print("done.")
@@ -658,12 +665,122 @@ def train_logistic_regression(X_train: np.ndarray,
                    because the jm1 feature space takes more steps to converge.
     solver='lbfgs': Limited-memory BFGS — efficient for medium-sized datasets.
     """
-    print("  [3/3] Training Logistic Regression    ...", end=" ", flush=True)
+    print("  [3/5] Training Logistic Regression    ...", end=" ", flush=True)
     model = LogisticRegression(
         C            = 1.0,
         max_iter     = 1000,
         solver       = "lbfgs",
         random_state = random_state
+    )
+    model.fit(X_train, y_train)
+    print("done.")
+    return model
+
+
+# =============================================================================
+# MODEL 4 — Decision Tree
+# -----------------------------------------------------------------------------
+# A Decision Tree partitions the feature space through a sequence of recursive
+# binary questions (splits), building a tree structure from root to leaf nodes.
+#
+# How it works:
+#   1. Start with all training samples at the root node.
+#   2. Choose the feature and threshold that best separates classes — measured
+#      by Gini impurity:
+#        Gini(t) = 1 − Σ p(class)²
+#      A lower Gini score means a purer node (samples mostly from one class).
+#   3. Split the data into two child nodes (left: ≤ threshold, right: > threshold).
+#   4. Repeat recursively on each child node until a stopping criterion is met
+#      (e.g., all samples in a node belong to one class → leaf node).
+#
+# Prediction: traverse the tree from root to the appropriate leaf, output the
+# majority class label in that leaf.
+#
+# Strengths : highly interpretable (can be visualised as a flowchart),
+#             fast to train and predict, handles non-linear boundaries.
+# Weaknesses: prone to overfitting if grown to full depth — a deep tree can
+#             memorise the training set perfectly but generalise poorly.
+#             Random Forest addresses this by averaging many shallow trees.
+# =============================================================================
+
+def train_decision_tree(X_train: np.ndarray,
+                        y_train: np.ndarray,
+                        random_state: int = 42) -> DecisionTreeClassifier:
+    """
+    Train a Decision Tree Classifier.
+
+    Key hyperparameters
+    -------------------
+    criterion    : 'gini' (default) — split criterion based on Gini impurity.
+    max_depth    : None (default) — tree grows until all leaves are pure.
+                   Leaving unrestricted allows a perfect fit on training data
+                   but risks overfitting; depth limiting is a common remedy.
+    random_state : ensures reproducibility when tie-breaking between splits.
+    """
+    print("  [4/5] Training Decision Tree          ...", end=" ", flush=True)
+    model = DecisionTreeClassifier(
+        random_state = random_state
+        # criterion='gini' and max_depth=None are sklearn defaults.
+        # We keep defaults here to establish an untuned baseline consistent
+        # with the Shailee et al. (iCACCESS 2024) experimental setup.
+    )
+    model.fit(X_train, y_train)
+    print("done.")
+    return model
+
+
+# =============================================================================
+# MODEL 5 — K-Nearest Neighbors (KNN)
+# -----------------------------------------------------------------------------
+# KNN is a non-parametric, instance-based ("lazy") learner. It stores the
+# entire training set and defers all computation to prediction time.
+#
+# How it works:
+#   1. For each new (test) sample x, compute the distance from x to every
+#      training sample — Euclidean distance is the default:
+#        d(a, b) = sqrt( Σ (a_i − b_i)² )
+#   2. Find the K training samples with the smallest distances (the
+#      "K nearest neighbours").
+#   3. Take a majority vote: predict the class that appears most often
+#      among the K neighbours.
+#
+# Key properties:
+#   • No training phase: the model is simply the stored training set.
+#     All work (distance computation) happens at inference time.
+#   • Feature scaling is CRITICAL: without it, features with large numeric
+#     ranges (e.g., lines-of-code) dominate the distance calculation.  Our
+#     StandardScaler preprocessing step ensures equal contribution.
+#   • Sensitive to the choice of K:
+#       K = 1  → very flexible, tends to overfit (high variance)
+#       K large → smoother decision boundary, may underfit (high bias)
+#     K = 5 is the standard default starting point.
+#   • Performance warning: with 10,885 training samples and 21 features,
+#     KNN computes ~10K distances per test sample — this "lazy learning"
+#     makes prediction noticeably slower than eager learners (RF, LR, DT).
+#     n_jobs=-1 parallelises distance computation across CPU cores to mitigate
+#     the latency somewhat.
+# =============================================================================
+
+def train_knn(X_train: np.ndarray,
+              y_train: np.ndarray,
+              n_neighbors: int = 5) -> KNeighborsClassifier:
+    """
+    Train a K-Nearest Neighbors Classifier.
+
+    Key hyperparameters
+    -------------------
+    n_neighbors : K — number of neighbours consulted for majority vote.
+                  Default K=5 is the standard starting point recommended in
+                  most ML textbooks and used in the reference paper.
+    metric      : 'minkowski' with p=2 (default) → Euclidean distance.
+    n_jobs=-1   : parallelise distance computation across all CPU cores.
+                  Important on jm1 because KNN is slower than eager learners —
+                  all distance calculations happen at prediction time.
+    """
+    print("  [5/5] Training K-Nearest Neighbors    ...", end=" ", flush=True)
+    model = KNeighborsClassifier(
+        n_neighbors = n_neighbors,
+        n_jobs      = -1     # parallel distance computation (lazy learner optimisation)
     )
     model.fit(X_train, y_train)
     print("done.\n")
@@ -1040,15 +1157,32 @@ def plot_correlation_heatmap(df: pd.DataFrame, target_col: str,
 # ── Plot 3: Confusion Matrix Heatmaps ────────────────────────────────────────
 
 def plot_confusion_matrices(results: list, plots_dir: str,
-                            suptitle: str = "Confusion Matrices — All 3 Models (Baseline)") -> None:
+                            suptitle: str = "Confusion Matrices — All 5 Models (Baseline)") -> None:
     """
-    Side-by-side seaborn confusion matrix heatmaps for all 3 models.
+    Seaborn confusion matrix heatmaps for all models in a dynamic grid layout.
     Cell values are raw counts. Colour intensity shows relative magnitude.
     Subtitle shows F1 and AUC for quick cross-model comparison.
-    """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    for ax, r in zip(axes, results):
+    Layout adapts to the number of models:
+      ≤ 3 models → 1 row  × n cols
+      4–6 models → 2 rows × 3 cols  (cells beyond len(results) are hidden)
+    """
+    n = len(results)
+    if n <= 3:
+        # Original single-row layout for 3 or fewer models.
+        n_rows, n_cols = 1, n
+        fig_w, fig_h   = n * 6, 5
+    else:
+        # Two-row grid: 3 columns per row — accommodates 4 or 5 models cleanly.
+        n_cols = 3
+        n_rows = int(np.ceil(n / n_cols))   # 5 models → 2 rows
+        fig_w, fig_h = n_cols * 6, n_rows * 5
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_w, fig_h))
+    # Flatten to 1-D regardless of whether axes is 1-D or 2-D.
+    axes_flat = np.array(axes).flatten()
+
+    for ax, r in zip(axes_flat, results):
         cm_arr = np.array([[r["TN"], r["FP"]],
                            [r["FN"], r["TP"]]])
         sns.heatmap(
@@ -1061,6 +1195,10 @@ def plot_confusion_matrices(results: list, plots_dir: str,
             f"{r['model']}\nF1 = {r['f1']:.3f}  |  AUC = {r['auc']:.3f}",
             fontsize=11, fontweight="bold"
         )
+
+    # Hide any unused subplot cells in the last row.
+    for ax in axes_flat[n:]:
+        ax.set_visible(False)
 
     fig.suptitle(suptitle, fontsize=14, fontweight="bold", y=1.02)
     plt.tight_layout()
@@ -1446,12 +1584,16 @@ def main():
 
     # ── Step 5: Train baseline models ─────────────────────────────────────
     # NOTE: Random Forest now uses the GridSearchCV-tuned model.
+    # Decision Tree and KNN are added to match the model set from the
+    # reference paper (Shailee et al., iCACCESS 2024).
     print("=" * 62)
-    print("  STEP 5 — BASELINE MODEL TRAINING")
+    print("  STEP 5 — BASELINE MODEL TRAINING  (5 models)")
     print("=" * 62)
     rf_model  = rf_tuned                                    # tuned RF
     gnb_model = train_naive_bayes(X_train, y_train)
     lr_model  = train_logistic_regression(X_train, y_train)
+    dt_model  = train_decision_tree(X_train, y_train)
+    knn_model = train_knn(X_train, y_train)
 
     # ── Step 6: Evaluate baseline models ──────────────────────────────────
     print("=" * 62)
@@ -1461,6 +1603,8 @@ def main():
     before_results.append(evaluate_model(rf_model,  X_test, y_test, "Random Forest"))
     before_results.append(evaluate_model(gnb_model, X_test, y_test, "Gaussian Naive Bayes"))
     before_results.append(evaluate_model(lr_model,  X_test, y_test, "Logistic Regression"))
+    before_results.append(evaluate_model(dt_model,  X_test, y_test, "Decision Tree"))
+    before_results.append(evaluate_model(knn_model, X_test, y_test, "K-Nearest Neighbors"))
 
     # ── Step 7: Comparison table (baseline) ───────────────────────────────
     print_comparison(before_results,
@@ -1470,17 +1614,21 @@ def main():
     X_train_sm, y_train_sm = apply_smote(X_train, y_train)
 
     print("=" * 62)
-    print("  STEP 8b — MODEL TRAINING  (After SMOTE)")
+    print("  STEP 8b — MODEL TRAINING  (After SMOTE, 5 models)")
     print("=" * 62)
     rf_sm  = train_random_forest(X_train_sm, y_train_sm)
     gnb_sm = train_naive_bayes(X_train_sm, y_train_sm)
     lr_sm  = train_logistic_regression(X_train_sm, y_train_sm)
+    dt_sm  = train_decision_tree(X_train_sm, y_train_sm)
+    knn_sm = train_knn(X_train_sm, y_train_sm)
 
     print("  Evaluating SMOTE models on the original (untouched) test set …\n")
     after_results = []
     after_results.append(evaluate_model(rf_sm,  X_test, y_test, "Random Forest"))
     after_results.append(evaluate_model(gnb_sm, X_test, y_test, "Gaussian Naive Bayes"))
     after_results.append(evaluate_model(lr_sm,  X_test, y_test, "Logistic Regression"))
+    after_results.append(evaluate_model(dt_sm,  X_test, y_test, "Decision Tree"))
+    after_results.append(evaluate_model(knn_sm, X_test, y_test, "K-Nearest Neighbors"))
 
     print_comparison(after_results,
                      title="MODEL COMPARISON  (After SMOTE)")

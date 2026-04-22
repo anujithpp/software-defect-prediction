@@ -13,7 +13,7 @@ This project is inspired by and extends the methodology of:
 > Dhaka, Bangladesh, March 2024.
 > DOI: [10.1109/ICACCESS61735.2024.10499572](https://doi.org/10.1109/ICACCESS61735.2024.10499572)
 
-The reference paper applies Random Forest, Gaussian Naive Bayes, and Logistic Regression to the JM1 dataset and reports Accuracy, Precision, Recall, F1-Score, and RMSE. This project replicates that core experimental setup and extends it with several methodological enhancements described in the section below.
+The reference paper applies seven classifiers — including Random Forest, Gaussian Naive Bayes, Logistic Regression, Decision Tree, and KNN — to the JM1 dataset and reports Accuracy, Precision, Recall, F1-Score, and RMSE. This project replicates five of those models and extends the experimental setup with several methodological enhancements described in the section below.
 
 ---
 
@@ -22,7 +22,7 @@ The reference paper applies Random Forest, Gaussian Naive Bayes, and Logistic Re
 | Feature | Reference Paper (Shailee et al., 2024) | This Project |
 |---|---|---|
 | **Dataset** | NASA JM1 | NASA JM1 (identical) |
-| **Models** | RF, GNB, LR | RF, GNB, LR (identical) |
+| **Models** | RF, GNB, LR, DT, KNN (7 tested) | RF, GNB, LR, DT, KNN (5 of the paper's 7 models) |
 | **Metrics** | Accuracy, Precision, Recall, F1, RMSE | Accuracy, Precision, Recall, F1, ROC-AUC, RMSE |
 | **Cross-Validation** | Not reported | ✅ 10-fold Stratified K-Fold |
 | **Class Imbalance Handling** | Not addressed | ✅ SMOTE (training set only) |
@@ -95,7 +95,7 @@ All plots are saved to `plots/` and displayed interactively.
 | **Cross-Validation** | 10-fold Stratified K-Fold on full dataset (pre-split) |
 | **Split** | 80 % train / 20 % test (stratified) |
 | **Hyperparameter Tuning** | GridSearchCV on Random Forest (36 combos × 5 folds = 180 fits) |
-| **Models** | Random Forest · Gaussian Naive Bayes · Logistic Regression |
+| **Models** | Random Forest · Gaussian Naive Bayes · Logistic Regression · Decision Tree · K-Nearest Neighbors |
 | **Metrics** | Accuracy, Precision, Recall, F1-Score, ROC-AUC, RMSE |
 | **Imbalance fix** | SMOTE applied to training set only (never test set) |
 | **Visualizations** | 9 PNG plots saved to `plots/` and `plots/eda/` |
@@ -111,6 +111,8 @@ All plots are saved to `plots/` and displayed interactively.
 | 🥇 | **Random Forest** | 80.98 % | 51.78 % | 24.23 % | **33.01 %** | **0.7174** | 0.4357 |
 | 🥈 | Gaussian Naive Bayes | 80.20 % | 47.60 % | 23.52 % | 31.48 % | 0.6758 | 0.4451 |
 | 🥉 | Logistic Regression | 80.98 % | 53.54 % | 12.59 % | 20.38 % | 0.6928 | 0.4357 |
+| 4 | Decision Tree | — | — | — | — | — | — |
+| 5 | K-Nearest Neighbors | — | — | — | — | — | — |
 
 ### After SMOTE
 
@@ -119,6 +121,8 @@ All plots are saved to `plots/` and displayed interactively.
 | 🥇 | **Logistic Regression** | 69.36 % | 33.01 % | 56.77 % | **41.75 %** | 0.6945 | 0.5533 |
 | 🥈 | Random Forest | 77.95 % | 42.38 % | 38.95 % | 40.59 % | **0.7337** | 0.4706 |
 | 🥉 | Gaussian Naive Bayes | 79.79 % | 45.74 % | 24.23 % | 31.68 % | 0.6765 | 0.4496 |
+| 4 | Decision Tree | — | — | — | — | — | — |
+| 5 | K-Nearest Neighbors | — | — | — | — | — | — |
 
 > **Note on RMSE:** Although RMSE is conventionally a regression metric, it is valid for binary classifiers because `y` and `ŷ` are 0/1 integers.
 > It simplifies to `sqrt(error_rate)`, which penalises large misclassification counts
@@ -131,10 +135,13 @@ All plots are saved to `plots/` and displayed interactively.
 | Logistic Regression | **+0.2136** | **+0.4418** |
 | Random Forest | +0.0758 | +0.1473 |
 | Gaussian Naive Bayes | +0.0020 | +0.0071 |
+| Decision Tree | — | — |
+| K-Nearest Neighbors | — | — |
 
 > **Note:** Low baseline Recall is expected — the dataset is class-imbalanced (19.3 % defective, ratio 1:4.2).
 > SMOTE dramatically improves Recall (especially for LR) at the cost of Precision.
 > **Random Forest** leads on ROC-AUC both before and after SMOTE.
+> Rows marked **—** will be populated automatically when the pipeline is run.
 
 ---
 
@@ -144,7 +151,7 @@ All plots are saved to `plots/` and displayed interactively.
 |------|-------------|
 | `01_class_distribution.png` | Bar chart — clean vs defective count + % (shows imbalance) |
 | `02_correlation_heatmap.png` | Seaborn heatmap — Pearson r between all 21 features |
-| `03_confusion_matrices.png` | Side-by-side CM heatmaps for all 3 baseline models |
+| `03_confusion_matrices.png` | 2×3 grid of CM heatmaps — all 5 baseline models |
 | `04_feature_importance.png` | Top 15 Random Forest features (mean decrease in Gini impurity) |
 | `05_roc_curves.png` | Overlaid ROC curves with AUC scores in legend |
 | `06_smote_comparison.png` | Grouped bars — F1 & Recall before vs after SMOTE |
