@@ -30,6 +30,7 @@ The reference paper applies seven classifiers — including Random Forest, Gauss
 | **EDA Section** | Not included | ✅ Full EDA (distributions, outliers, correlations) |
 | **Visualizations** | Not included | ✅ 6+ publication-quality plots |
 | **ROC-AUC** | Not reported | ✅ Reported for all models |
+| **Data Leakage Prevention** | Not addressed | ✅ Imputer & Scaler fit on X_train only; CV uses sklearn Pipeline per fold |
 
 ---
 
@@ -58,7 +59,8 @@ software-defect-prediction/
 ├── requirements.txt               # Python dependencies
 ├── .gitignore
 ├── LICENSE
-└── README.md
+├── README.md
+└── output.txt                     # Full console output from last pipeline run
 ```
 
 ---
@@ -89,10 +91,10 @@ All plots are saved to `plots/` and displayed interactively.
 
 | Step | Detail |
 |------|--------|
-| **Dataset** | NASA PROMISE — jm1 (10,885 modules, 21 features) |
+| **Dataset** | NASA PROMISE — jm1 (10,885 modules, 16 numeric features — 5 non-numeric columns excluded) |
 | **Target** | `defects` column — True (buggy) / False (clean) |
-| **Preprocessing** | Mean imputation → StandardScaler normalisation (µ=0, σ=1) |
-| **Cross-Validation** | 10-fold Stratified K-Fold on full dataset (pre-split) |
+| **Preprocessing** | Mean imputation → StandardScaler (µ=0, σ=1) — both fit on X_train only (no data leakage) |
+| **Cross-Validation** | 10-fold Stratified K-Fold using sklearn Pipeline — scaler fit per fold (no leakage) |
 | **Split** | 80 % train / 20 % test (stratified) |
 | **Hyperparameter Tuning** | GridSearchCV on Random Forest (36 combos × 5 folds = 180 fits) |
 | **Models** | Random Forest · Gaussian Naive Bayes · Logistic Regression · Decision Tree · K-Nearest Neighbors |
@@ -104,43 +106,76 @@ All plots are saved to `plots/` and displayed interactively.
 
 ## 📊 Results
 
-### Baseline (Before SMOTE)
+### Cross-Validation Results (10-fold Stratified K-Fold)
+
+| Rank | Model | Mean F1 | Std F1 | Min F1 | Max F1 |
+|------|-------|---------|--------|--------|--------|
+| 🥇 | Decision Tree | 0.3600 | 0.0310 | 0.3059 | 0.4120 |
+| 🥈 | K-Nearest Neighbors | 0.3386 | 0.0338 | 0.2791 | 0.3886 |
+| 🥉 | Random Forest | 0.3321 | 0.0209 | 0.3030 | 0.3601 |
+| 4 | Gaussian Naive Bayes | 0.2771 | 0.0362 | 0.2230 | 0.3310 |
+| 5 | Logistic Regression | 0.1764 | 0.0275 | 0.1240 | 0.2179 |
+
+> CV used sklearn Pipeline so imputation and scaling are fit only on each 
+> fold's training portion — fully leak-free. Decision Tree leads in CV F1, 
+> showing strong pattern recognition on this dataset. Random Forest has the 
+> lowest Std F1 (0.0209) — most consistent performance across folds.
+
+### Baseline Results (Before SMOTE)
 
 | Rank | Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC | RMSE |
 |------|-------|----------|-----------|--------|----------|---------|------|
-| 🥇 | **Random Forest** | 80.98 % | 51.78 % | 24.23 % | **33.01 %** | **0.7174** | 0.4357 |
-| 🥈 | Gaussian Naive Bayes | 80.20 % | 47.60 % | 23.52 % | 31.48 % | 0.6758 | 0.4451 |
-| 🥉 | Logistic Regression | 80.98 % | 53.54 % | 12.59 % | 20.38 % | 0.6928 | 0.4357 |
-| 4 | Decision Tree | 74.28 % | 33.95 % | 34.92 % | 34.43 % | 0.5727 | 0.5072 |
-| 5 | K-Nearest Neighbors | 79.01 % | 43.18 % | 27.08 % | 33.28 % | 0.6836 | 0.4582 |
+| 🥇 | **Decision Tree** | 74.28% | 33.95% | 34.92% | **34.43%** | 0.5727 | 0.5072 |
+| 🥈 | K-Nearest Neighbors | 79.01% | 43.18% | 27.08% | 33.28% | 0.6836 | 0.4582 |
+| 🥉 | Random Forest | 80.75% | 50.52% | 23.28% | 31.87% | **0.7175** | 0.4387 |
+| 4 | Gaussian Naive Bayes | 80.20% | 47.60% | 23.52% | 31.48% | 0.6758 | 0.4449 |
+| 5 | Logistic Regression | 80.98% | 53.54% | 12.59% | 20.38% | 0.6927 | 0.4361 |
 
-### After SMOTE
+> **Important distinction:** Decision Tree leads on F1-Score (34.43%) but has 
+> the lowest ROC-AUC (0.5727). Random Forest has lower F1 (31.87%) but the 
+> best ROC-AUC (0.7175). For imbalanced datasets, ROC-AUC is the more 
+> reliable metric — **Random Forest is the strongest overall model.**
+> Low Recall across all models is expected given the class imbalance 
+> (19.3% defective, ratio 1:4.2).
+
+> **Hyperparameter Tuning (GridSearchCV — 180 fits):** Best parameters found 
+> were n_estimators=100, max_depth=None, min_samples_split=2 — identical to 
+> the defaults. ΔF1 = 0.0000. This is a valid and informative result: it 
+> confirms that Random Forest's default parameters are already well-suited 
+> to the JM1 dataset. GridSearchCV still provides value by ruling out 
+> 35 other parameter combinations systematically.
+
+### After SMOTE Results
 
 | Rank | Model | Accuracy | Precision | Recall | F1-Score | ROC-AUC | RMSE |
 |------|-------|----------|-----------|--------|----------|---------|------|
-| 🥇 | **Logistic Regression** | 69.36 % | 33.01 % | 56.77 % | **41.75 %** | 0.6945 | 0.5533 |
-| 🥈 | Random Forest | 77.95 % | 42.38 % | 38.95 % | 40.59 % | **0.7337** | 0.4706 |
-| 🥉 | Gaussian Naive Bayes | 79.79 % | 45.74 % | 24.23 % | 31.68 % | 0.6765 | 0.4496 |
-| 4 | Decision Tree | 74.55 % | 36.17 % | 41.33 % | 38.58 % | 0.6053 | 0.5045 |
-| 5 | K-Nearest Neighbors | 66.15 % | 30.10 % | 56.77 % | 39.34 % | 0.6814 | 0.5818 |
+| 🥇 | **Logistic Regression** | 69.45% | 33.06% | 56.53% | **41.72%** | 0.6948 | 0.5527 |
+| 🥈 | Random Forest | 77.31% | 40.90% | 38.95% | 39.90% | **0.7302** | 0.4764 |
+| 🥉 | K-Nearest Neighbors | 66.15% | 30.10% | 56.77% | 39.34% | 0.6814 | 0.5818 |
+| 4 | Decision Tree | 74.55% | 36.17% | 41.33% | 38.58% | 0.6053 | 0.5045 |
+| 5 | Gaussian Naive Bayes | 79.74% | 45.54% | 24.23% | 31.63% | 0.6765 | 0.4501 |
 
-> **Note on RMSE:** Although RMSE is conventionally a regression metric, it is valid for binary classifiers because `y` and `ŷ` are 0/1 integers.
-> It simplifies to `sqrt(error_rate)`, which penalises large misclassification counts
-> more heavily than Accuracy does. Reported here in alignment with Shailee et al. (2024).
+> **Note on RMSE:** Although RMSE is conventionally a regression metric, it 
+> is valid for binary classifiers because y and ŷ are 0/1 integers. It 
+> simplifies to sqrt(error_rate), penalising large misclassification counts 
+> more heavily than Accuracy. Reported here in alignment with Shailee et al. (2024).
 
 ### SMOTE Impact
 
-| Model | ΔF1 | ΔRecall |
-|-------|-----|---------|
-| Logistic Regression | **+0.2136** | **+0.4418** |
-| Random Forest | +0.0758 | +0.1473 |
-| Gaussian Naive Bayes | +0.0020 | +0.0071 |
-| Decision Tree | +0.0415 | +0.0641 |
-| K-Nearest Neighbors | +0.0606 | +0.2969 |
+| Model | F1 Before | F1 After | ΔF1 | Recall Before | Recall After | ΔRecall |
+|-------|-----------|----------|-----|---------------|-------------|---------|
+| Logistic Regression | 0.2038 | 0.4172 | **+0.2133** | 0.1259 | 0.5653 | **+0.4394** |
+| K-Nearest Neighbors | 0.3328 | 0.3934 | +0.0606 | 0.2708 | 0.5677 | +0.2969 |
+| Random Forest | 0.3187 | 0.3990 | +0.0803 | 0.2328 | 0.3895 | +0.1568 |
+| Decision Tree | 0.3443 | 0.3858 | +0.0415 | 0.3492 | 0.4133 | +0.0641 |
+| Gaussian Naive Bayes | 0.3148 | 0.3163 | +0.0015 | 0.2352 | 0.2423 | +0.0071 |
 
-> **Note:** Low baseline Recall is expected — the dataset is class-imbalanced (19.3 % defective, ratio 1:4.2).
-> SMOTE dramatically improves Recall (especially for LR) at the cost of Precision.
-> **Random Forest** leads on ROC-AUC both before and after SMOTE.
+> SMOTE dramatically improves Recall across all models by exposing them to 
+> more synthetic defective examples during training. Logistic Regression 
+> benefits the most (+0.4394 Recall). Random Forest retains the best 
+> ROC-AUC after SMOTE (0.7302), confirming it as the most robust model. 
+> The test set is NEVER oversampled — all results reflect the real-world 
+> class distribution (19.3% defective).
 
 ---
 
