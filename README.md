@@ -171,7 +171,7 @@ scipy>=1.9.0           # point-biserial correlation (EDA)
 
 ## 🧑‍🎓 Academic Context
 
-- **Course:** 6th Semester Mini-Project
+- **Course:** 6th Semester Project
 - **Domain:** Software Engineering + Machine Learning
 - **Dataset Source:** [OpenML — jm1 (ID: 1053)](https://www.openml.org/d/1053)
 - **Reference Paper:** Shailee et al., iCACCESS 2024, DOI: [10.1109/ICACCESS61735.2024.10499572](https://doi.org/10.1109/ICACCESS61735.2024.10499572)
